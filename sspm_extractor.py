@@ -2,6 +2,7 @@ import struct
 import sys
 import os
 from typing import BinaryIO
+from glob import glob
 
 difficulty_array = [
     'N/A',
@@ -13,6 +14,10 @@ difficulty_array = [
 ]
 
 
+def clear():
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+
 def read_as_int(file, byte_amount: int):
     return int.from_bytes(file.read(byte_amount), byteorder=sys.byteorder)
 
@@ -21,8 +26,6 @@ def read_type(file: BinaryIO, skip_type=False, skip_array_type=False, data_type=
     if not skip_type:
         data_type = read_as_int(file, 1)
 
-
-    # I'd use a match statement but then this wouldn't work on anything before python 3.10
     if data_type == 1:
         return read_as_int(file, 1)
     elif data_type == 2:
@@ -57,25 +60,75 @@ def read_type(file: BinaryIO, skip_type=False, skip_array_type=False, data_type=
 
 
 def print_help():
-    print(
-'''
+    print('''
 Usage:
 python sspm_extractor.py [path to .sspm file]
-'''
-    )
+python sspm_extractor.py [option] [path to .sspm file]
+
+Example:
+python sspm_extractor.py your_sspm_file.sspm
+python sspm_extractor.py -d maps
+
+Options:
+-h / --help             Prints this help message
+-d / --directory        Extract an entire directory containing .sspm files
+-f / --file             Extract a .sspm file (default if not option is provided)
+''')
 
 
+# Handles command line input
 def main(args):
     if not args:
-        return
+        print('You have not provided any file or directory to extract.')
+        print_help()
     elif args[0] in ['-h', '--help']:
         print_help()
-    elif not os.path.isfile(args[0]) or os.path.splitext(args[0])[1] != '.sspm':
-        print("Input file does not exist or is invalid.\n")
-        print_help()
-        return
+    elif args[0] in ['-d', '--directory']:
+        if len(args) == 1:
+            print('Please provide a path to a directory.')
+            return
+        if not os.path.exists(args[1]):
+            print('The path you provided does not exist.')
+            print_help()
+            return
+        elif not os.path.isdir(args[1]):
+            print('The path you provided is not a directory.')
+            print_help()
+            return
 
-    with open(args[0], mode='rb') as file:
+        extract_directory(args[1])
+    else:
+        if args[0] in ['-f', '--file']:
+            if len(args) == 1:
+                print('Please provide a path to a file.')
+                return
+            elif not os.path.exists(args[1]):
+                print('The path you provided does not exist.')
+                return
+            elif not os.path.isfile(args[1]):
+                print('The path you provided is not a file')
+                return
+            elif not os.path.splitext(args[1])[1] == '.sspm':
+                print('The file you provided does not end in ".sspm".')
+                return
+
+            extract_file(args[1])
+        else:
+            if not os.path.exists(args[0]):
+                print('The path you provided does not exist.')
+                return
+            elif not os.path.isfile(args[0]):
+                print('The path you provided is not a file')
+                return
+            elif not os.path.splitext(args[0])[1] == '.sspm':
+                print('The file you provided does not end in ".sspm".')
+                return
+
+            extract_file(args[0])
+
+
+def extract_file(path, extract_dir=False, extract_dir_path=None):
+    with open(path, mode='rb') as file:
         # Get amount of markers and difficulty name
         file.seek(0x26)
         marker_count = read_as_int(file, 4)
@@ -83,9 +136,7 @@ def main(args):
 
         # Check if file contains audio
         file.read(2)
-        if not bool.from_bytes(file.read(1)):
-            print('The file doesn\'t contain music / is broken.')
-            return
+        has_audio = bool.from_bytes(file.read(1))
 
         # Check if file contains a cover image
         has_cover = bool.from_bytes(file.read(1))
@@ -133,11 +184,10 @@ def main(args):
             file_extension = 'wav'
         elif int.from_bytes(audio[0:2]) == 0xFFFB or int.from_bytes(
                 audio[0:2]) == 0xFFF3 or int.from_bytes(audio[0:2]) == 0xFFFA or int.from_bytes(
-                audio[0:2]) == 0xFFF2 or int.from_bytes(audio[0:3]) == 0x494433:
+            audio[0:2]) == 0xFFF2 or int.from_bytes(audio[0:3]) == 0x494433:
             file_extension = 'mp3'
         else:
-            print('The audio buffer contained in the file can\'t be read.')
-            return
+            has_audio = False
 
         # Get cover image if it exists
         if has_cover:
@@ -170,8 +220,9 @@ def main(args):
 
         # Read notes from markers and format it to match SSQE's format
         note_string = f'{map_id},'
-
         notes = []
+        has_notes = True
+
         if 'ssp_note' in markers.keys():
             for note_data in markers['ssp_note']:
                 if note_data[1][0] != 7:
@@ -187,18 +238,21 @@ def main(args):
                 for note in notes:
                     note_string += f'{note[0]:.2f}|{note[1]:.2f}|{note[2]},'
             else:
-                print('This map contains no notes / No notes could be found.')
+                has_notes = False
             note_string.removesuffix(',')
         else:
-            print('This map contains no notes / No notes could be found.')
+            has_notes = False
 
         # Save data
-        save_path = f'{args[0].removesuffix(".sspm")}'
+        if extract_dir:
+            save_path = extract_dir_path
+        else:
+            save_path = os.path.abspath(path.removesuffix('.sspm'))
         audio_file_path = os.path.join(save_path, f'audio.{file_extension}')
         metadata_file_path = os.path.join(save_path, f'metadata.txt')
         cover_file_path = os.path.join(save_path, f'cover.png')
         notes_file_path = os.path.join(save_path, f'notes.txt')
-        ssqe_ini_file_path = os.path.join(save_path, f'song.ini')
+        ssqe_ini_file_path = os.path.join(save_path, f'notes.ini')
 
         if not os.path.exists(f'{save_path}'):
             os.mkdir(f'{save_path}')
@@ -216,10 +270,58 @@ def main(args):
             with open(notes_file_path, 'x') as note_file:
                 note_file.write(note_string)
             with open(ssqe_ini_file_path, 'x') as ssqe_ini_file:
-                ssqe_ini_file.write(f'{{"beatDivisor": 2, "bookmarks": [], "cover": "{"cover.png" if has_cover else "Default"}", "currentTime": 0, "customDifficulty": "{"" if difficulty in difficulty_array else difficulty}", "difficulty": "{difficulty}", "exportOffset": 0, "mappers": "{mappers}", "songName": "{song}", "timings": [], "useCover": {"true" if has_cover else "false"}}}')
+                ssqe_ini_file.write(
+                    f'{{"beatDivisor": 2, "bookmarks": [], "cover": "{"cover.png" if has_cover else "Default"}", "currentTime": 0, "customDifficulty": "{"" if difficulty in difficulty_array else difficulty}", "difficulty": "{difficulty}", "exportOffset": 0, "mappers": "{mappers}", "songName": "{song}", "timings": [], "useCover": {"true" if has_cover else "false"}}}')
+
+            if not extract_dir:
+                print(f'''Audio: {"Extracted successfully" if has_audio else "Could not be extracted"}
+    Cover: {"Extracted successfully" if has_cover else "Could not be extracted or does not exist"}
+    Notes: {"Extracted successfully" if has_notes else "Could not be extracted"}
+    
+    Your files are in {save_path} :)
+    ''')
         else:
-            print('A folder with this map\'s ID already exists. Are you sure you haven\'t extracted it before?')
+            if not extract_dir:
+                print('A folder with this map\'s ID already exists. Are you sure you haven\'t extracted it before?')
             return
+
+
+def progress_bar(value, max_value, length):
+    progress = int(value / max_value * length)
+    left = length - progress
+
+    print(f'Progress:\n[{"=" * progress}{" " * left}] ({value}/{max_value})')
+
+
+def extract_directory(path):
+    files = glob('*.sspm', root_dir=path)
+    print(files)
+    if not files:
+        print('There are no .sspm files in the directory you provided.')
+        return
+
+    extracted_path = os.path.abspath(path + '_extracted')
+
+    if not os.path.exists(extracted_path):
+        os.mkdir(extracted_path)
+    else:
+        print(
+            f'The folder\ {path + "_extracted"} already exists. Are you sure you haven\'t extracted this directory before?')
+        return
+
+    successfully_extracted = 0
+    for i, file in enumerate(files):
+        try:
+            extract_file(os.path.join(path, file), True, os.path.join(extracted_path, os.path.splitext(file)[0]))
+            successfully_extracted += 1
+        except:  # Sorry
+            pass
+        finally:
+            clear()
+            progress_bar(i + 1, len(files), 40)
+
+    print(f'\nSuccessfully extracted {successfully_extracted}/{len(files)} .sspm files.')
+    print(f'Your files are in {extracted_path} :)')
 
 
 if __name__ == '__main__':
